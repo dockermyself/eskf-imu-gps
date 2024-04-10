@@ -12,7 +12,7 @@ include_directories(
   third_party/GeographicLib/include
 )
 
-add_executable(main
+add_executable(imu_gps_fusion
     main.cpp
 	src/eskf.cpp
     src/initializer.cpp
@@ -22,4 +22,4 @@ add_executable(main
     src/gps_reader.cpp
 )
 
-target_link_libraries(main ${EIGEN3_LIBS}  pthread atomic)
+target_link_libraries(imu_gps_fusion ${EIGEN3_LIBS}  pthread atomic)
