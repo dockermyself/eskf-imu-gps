@@ -11,10 +11,9 @@ make
 ```
 ## 3. 运行
 ```bash
-./imu_gps_fusion
+
 ```
-```
-## 4. 效果
-![GPS Trajectory](<GPS Trajectory.png>)
-![Velocity 随时间变化](<Velocity Trajectory.png>)
-![ESKF 融合定位结果](<Position Trajectory.png>)
+## 4.效果
+
+![ESKF融合定位结果](<Position Trajectory.png>)
+![速度随时间变化](<Velocity Trajectory.png>)
