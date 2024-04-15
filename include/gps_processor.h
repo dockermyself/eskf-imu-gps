@@ -13,11 +13,10 @@ namespace Localization
     public:
         GpsProcessor(const Eigen::Vector3d &I_p_Gps);
 
-        bool UpdateStateByGps(const Eigen::Vector3d &init_lla, const GpsDataPtr gps_data_ptr, State& state);
+        bool UpdateStateByGps(const Eigen::Vector3d &gps_pos,const Eigen::Matrix3d& gps_cov, State &state);
 
     private:
-        void ComputeJacobianAndResidual(const Eigen::Vector3d &init_lla,
-                                        const GpsDataPtr gps_data,
+        void ComputeJacobianAndResidual(const Eigen::Vector3d &gps_pos,
                                         const State &state,
                                         Eigen::Matrix<double, 3, 15> *jacobian,
                                         Eigen::Vector3d *residual);
@@ -25,7 +24,7 @@ namespace Localization
         const Eigen::Vector3d I_p_Gps_;
     };
 
-    void AddDeltaToState(const Eigen::Matrix<double, 15, 1> &delta_x, State& state);
+    void AddDeltaToState(const Eigen::Matrix<double, 15, 1> &delta_x, State &state);
 
 } // namespace Localization
 

@@ -1,5 +1,6 @@
 #include "imu_processor.h"
 #include <Eigen/Dense>
+#include <iostream>
 #include "eskf_utils.h"
 
 namespace Localization
@@ -12,11 +13,12 @@ namespace Localization
           acc_bias_noise_(acc_bias_noise), gyro_bias_noise_(gyro_bias_noise),
           gravity_(gravity) {}
 
-    void ImuProcessor::Predict(const ImuDataPtr last_imu, const ImuDataPtr cur_imu, State *state)
+    void ImuProcessor::Predict(const ImuDataPtr &last_imu, const ImuDataPtr &cur_imu, State *state)
     {
         // Time.
         const double delta_t = cur_imu->timestamp - last_imu->timestamp;
         const double delta_t2 = delta_t * delta_t;
+        // printf("time interval: %f\n", delta_t);
 
         // Set last state.
         State last_state = *state;
@@ -25,12 +27,12 @@ namespace Localization
         const Eigen::Vector3d acc_unbias = 0.5 * (last_imu->acc + cur_imu->acc) - last_state.acc_bias;
         const Eigen::Vector3d gyro_unbias = 0.5 * (last_imu->gyro + cur_imu->gyro) - last_state.gyro_bias;
 
+        // ENU坐标系下的加速度
         Eigen::Vector3d acc = last_state.G_R_I * acc_unbias + gravity_;
         // printf("acc: %f, %f, %f\n", acc(0), acc(1), acc(2));
         // Normal state.
-        state->G_p_I = last_state.G_p_I + last_state.G_v_I * delta_t +
-                       0.5 * (last_state.G_R_I * acc_unbias + gravity_) * delta_t2;
-        state->G_v_I = last_state.G_v_I + (last_state.G_R_I * acc_unbias + gravity_) * delta_t;
+        state->G_p_I = last_state.G_p_I + last_state.G_v_I * delta_t + 0.5 * acc * delta_t2;
+        state->G_v_I = last_state.G_v_I + acc * delta_t;
         const Eigen::Vector3d delta_angle_axis = gyro_unbias * delta_t;
         if (delta_angle_axis.norm() > 1e-12)
         {
@@ -68,5 +70,5 @@ namespace Localization
         state->timestamp = cur_imu->timestamp;
         state->imu_data_ptr = cur_imu;
     }
-
+ 
 } // namespace Localization

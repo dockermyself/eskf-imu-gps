@@ -13,7 +13,7 @@ namespace Localization
                      const double acc_bias_noise, const double gyro_bias_noise,
                      const Eigen::Vector3d &gravity);
 
-        void Predict(const ImuDataPtr last_imu, const ImuDataPtr cur_imu, State *state);
+        void Predict(const ImuDataPtr &last_imu, const ImuDataPtr &cur_imu, State *state);
 
     private:
         const double acc_noise_;

@@ -128,7 +128,7 @@ private:
             timestamp = gps_timestamp + _time_diff.load();
         }
         _time_diff.store(diff);
-        return timestamp;
+        return gps_timestamp;
     }
 };
 

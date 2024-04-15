@@ -40,6 +40,13 @@ namespace Localization
 
         // The imu data.
         ImuDataPtr imu_data_ptr;
+        State(): G_p_I(Eigen::Vector3d::Zero()),
+                 G_v_I(Eigen::Vector3d::Zero()),
+                 G_R_I(Eigen::Matrix3d::Identity()),
+                 acc_bias(Eigen::Vector3d::Zero()),
+                 gyro_bias(Eigen::Vector3d::Zero()),
+                 cov(Eigen::Matrix<double, 15, 15>::Zero()),
+                 imu_data_ptr(nullptr) {}
     };
 
 } // Localization

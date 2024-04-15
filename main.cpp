@@ -2,6 +2,10 @@
 #include <fstream>
 #include <thread>
 #include <eigen3/Eigen/Core>
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 #include "eskf.h"
 #include "imu_reader.h"
 #include "gps_reader.h"
@@ -14,73 +18,88 @@ namespace Localization
         GPS_STATUS_NO_FIX = 0,
         GPS_STATUS_FIX = 1,
     };
-
+    double kIMUInterval = 0.01;
     /*
-    #Accelerometer
-    accelerometer_noise_density: 0.013766600200452252
-    accelerometer_random_walk: 0.000467783974141409
-
-    #Gyroscope
-    gyroscope_noise_density: 0.0005230936266820257
-    gyroscope_random_walk: 2.717496598492677e-06
+    X Velocity Random Walk: 0.00345 m/s/sqrt(s) 0.20692 m/s/sqrt(hr)
+    Y Velocity Random Walk: 0.00309 m/s/sqrt(s) 0.18516 m/s/sqrt(hr)
+    Z Velocity Random Walk: 0.00423 m/s/sqrt(s) 0.25356 m/s/sqrt(hr)
+    X Bias Instability: 0.00022 m/s^2 2885.66064 m/hr^2
+    Y Bias Instability: 0.00018 m/s^2 2316.19565 m/hr^2
+    Z Bias Instability: 0.00060 m/s^2 7814.50546 m/hr^2
+    X Accel Random Walk: 0.00004 m/s^2/sqrt(s)
+    Y Accel Random Walk: 0.00003 m/s^2/sqrt(s)
+    Z Accel Random Walk: 0.00014 m/s^2/sqrt(s)
 
     */
-    // 动态噪声假定为静态标定结果的10倍
-    const double kAccNoiseDensity = 0.013766600200452252 * 10;
-    const double kGyroNoiseDensity = 0.0005230936266820257 * 10;
-    const double kAccBiasRandomWalk = 0.000467783974141409 * 10;
-    const double kGyroBiasRandomWalk = 2.717496598492677e-06 * 10;
+    // 实际噪声在标定结果的基础上乘以n倍
+    const double kAccNoise = (0.00345 + 0.00309 + 0.00423) / 3 / sqrt(kIMUInterval);
+    const double kAccBiasRandomWalk = (0.00022 + 0.00018 + 0.00060) / 3;
+    /*
+    X Angle Random Walk: 0.01061 deg/sqrt(s) 0.63638 deg/sqrt(hr)
+    Y Angle Random Walk: 0.01106 deg/sqrt(s) 0.66349 deg/sqrt(hr)
+    Z Angle Random Walk: 0.00975 deg/sqrt(s) 0.58473 deg/sqrt(hr)
+    X Bias Instability: 0.00011 deg/s 0.39469 deg/hr
+    Y Bias Instability: 0.00029 deg/s 1.04721 deg/hr
+    Z Bias Instability: 0.00009 deg/s 0.30922 deg/hr
+    X Rate Random Walk: 0.00005 deg/s/sqrt(s)
+    Y Rate Random Walk: 0.00006 deg/s/sqrt(s)
+    Z Rate Random Walk: 0.00005 deg/s/sqrt(s)
+    */
+    const double kGyroNoise = (0.01061 + 0.01106 + 0.00975) / 3 / sqrt(kIMUInterval) * kDegreeToRadian;
+    const double kGyroBiasRandomWalk = (0.00011 + 0.00029 + 0.00009) / 3 * kDegreeToRadian;
     /*
     Misalignment Matrix
-        1 -1.07293e-05   0.00109643
-        0            1  -0.00677617
-        0            0            1
+          1 0.000211026 -0.00592877
+          0           1  -0.0075711
+          0           0           1
     */
-    const double kAccMisalignment[9] = {1, -1.07293e-05, 0.00109643, 0, 1, -0.00677617, 0, 0, 1};
+    const double kAccMisalignment[9] = {1, 0.000211026, -0.00592877, 0, 1, -0.0075711, 0, 0, 1};
     /*
     Scale Matrix
-    1.00194     0       0
-    0       1.00224     0
-    0           0     1.004
+    1.01257       0       0
+        0 1.00275       0
+        0       0 1.00584
     */
-    const double kAccScaleFactor[3] = {1.00194, 1.00224, 1.004};
+    const double kAccScaleFactor[3] = {1.01257, 1.00275, 1.00584};
 
     /*
     Bias Vector
-    -0.0284018
-     0.0502699
-     0.781119
+    -0.0933937
+    0.0315169
+    0.793868
     */
 
-    const Eigen::Vector3d kAccBias = {-0.0284018, 0.0502699, 0.781119};
+    const Eigen::Vector3d kAccBias = {-0.0933937, 0.0315169, 0.793868};
 
     /*
     Misalignment Matrix
-        1           -0.0160567      -0.00108876
-    0.00703196           1          0.00474895
-    0.000234249     0.00142972           1
+        1       -0.00524587     -0.00778415
+    -0.0187879           1      0.0119236
+    -0.00803335  -0.0471048           1
     */
-    const double kGyroMisalignment[9] = {1, -0.0160567, -0.00108876, 0.00703196, 1, 0.00474895, 0.000234249, 0.00142972, 1};
+    const double kGyroMisalignment[9] = {1, -0.00524587, -0.00778415, -0.0187879, 1, 0.0119236, -0.00803335, -0.0471048, 1};
     /*
     Scale Matrix
-    1.38582     0          0
-    0        1.37703       0
-    0           0       1.4008
+    1.0104       0       0
+        0  1.0126       0
+        0       0 1.03008
     */
-    const double kGyroScaleFactor[3] = {1.38582, 1.37703, 1.4008};
+    const double kGyroScaleFactor[3] = {1.0104, 1.0126, 1.03008};
 
     /*
     Bias Vector
-    1.37549e-05
-    -1.37592e-05
-    3.1575e-05
+    1.99535e-05
+    -0.000118125
+    4.12334e-05
     */
-    const Eigen::Vector3d kGyroBias = {1.37549e-05, -1.37592e-05, 3.1575e-05};
+    const Eigen::Vector3d kGyroBias = {1.99535e-05, -0.000118125, 4.12334e-05};
 
     // GPS相对于IMU的位置(杆臂)
-    const Eigen::Vector3d kArmPos = {0.0, -0.2, 0.0};
+    const Eigen::Vector3d kArmPos = {0.05, -0.1, 0.0};
     // 当地重力加速度
     double kGravityNorm = 9.794;
+
+    double kVelocityMax = 2.0;
 
     class EskfSystem
     {
@@ -110,12 +129,13 @@ namespace Localization
         void CollectImuData(ImuReader &imu_reader)
         {
             static float last_timestamp = 0.0f;
-            const float imu_interval = 0.01f;
+            const float imu_interval = 0.0f;
             std::ofstream fout = std::ofstream("imu_data.bag");
             ImuOriginData data;
 
             auto start = std::chrono::steady_clock::now();
-            while (std::chrono::steady_clock::now() - start < std::chrono::hours(1))
+            auto duration = std::chrono::seconds(20 * 60);
+            while (std::chrono::steady_clock::now() - start < duration)
             {
                 if (imu_reader.getData(data))
                 {
@@ -230,6 +250,53 @@ namespace Localization
             }
         }
 
+        void LoggerWrite(const char *data, int len, const char *remote, int port)
+        {
+            static int logger_fd = -1;
+            if (logger_fd < 0)
+            {
+                logger_fd = socket(AF_INET, SOCK_DGRAM, 0);
+                if (logger_fd < 0)
+                {
+                    printf("socket create error\n");
+                    return;
+                }
+                struct sockaddr_in server_addr;
+                memset(&server_addr, 0, sizeof(server_addr));
+                server_addr.sin_family = AF_INET;
+                server_addr.sin_port = htons(port);
+                server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+
+                if (bind(logger_fd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
+                {
+                    printf("bind error\n");
+                    return;
+                }
+            }
+
+            struct sockaddr_in client_addr;
+            memset(&client_addr, 0, sizeof(client_addr));
+            client_addr.sin_family = AF_INET;
+            client_addr.sin_port = htons(port);
+            client_addr.sin_addr.s_addr = inet_addr(remote);
+            sendto(logger_fd, data, len, 0, (struct sockaddr *)&client_addr, sizeof(client_addr));
+        }
+        // 绘制(x,y)轨迹
+        void LoggerWriteTrajectory(double x, double y, const char *remote, int port)
+        {
+            char str_buffer[100] = {0};
+            sprintf(str_buffer, "pos %.3f %.3f", x, y);
+            LoggerWrite(str_buffer, strlen(str_buffer), remote, port);
+        }
+
+        // 绘制 GPS 轨迹
+        void LoggerWriteGps(double x, double y, const char *remote, int port)
+        {
+            char str_buffer[100] = {0};
+            sprintf(str_buffer, "gps %.3f %.3f", x, y);
+            LoggerWrite(str_buffer, strlen(str_buffer), remote, port);
+        }
+
         // 实现IMU数据读取
         const ImuDataPtr ReadImuData(ImuReader &imu_reader)
         {
@@ -269,23 +336,81 @@ namespace Localization
             }
             return nullptr;
         }
-
-        void Run(ImuReader &imu_reader, GPSReader &gps_reader)
+        // Imu 里程计
+        void ImuOdometry(ImuReader &imu_reader)
         {
             std::unique_ptr<Localization::Eskf> localizer_ptr_ =
-                std::make_unique<Localization::Eskf>(kAccNoiseDensity, kGyroNoiseDensity,
+                std::make_unique<Localization::Eskf>(kAccNoise, kGyroNoise,
                                                      kAccBiasRandomWalk, kGyroBiasRandomWalk,
-                                                     kArmPos, kGravityNorm);
-            Localization::State current_state = {0};
-            std::fstream eskf_state_file = std::fstream("eskf_state.bag", std::ios::out);
+                                                     Eigen::Vector3d(0, 0, 0), kGravityNorm, kVelocityMax);
+            Localization::State current_state;
+            std::fstream imu_odometry_file = std::fstream("imu_odometry_state.bag", std::ios::out);
             std::fstream gps_pos_file = std::fstream("gps_pos.bag", std::ios::out);
             // 当前时间
             auto start = std::chrono::steady_clock::now();
             auto save_time = start;
-            auto run_duration = std::chrono::seconds(20 * 60);
+            auto run_duration = std::chrono::seconds(60 * 100);
             auto save_interval = std::chrono::milliseconds(100);
 
             while (std::chrono::steady_clock::now() - start < run_duration)
+            {
+                const Localization::ImuDataPtr imu_data_ptr = ReadImuData(imu_reader);
+                if (imu_data_ptr && localizer_ptr_->ImuOdometry(imu_data_ptr))
+                {
+
+                    if (std::chrono::steady_clock::now() - save_time > save_interval)
+                    {
+                        save_time = std::chrono::steady_clock::now();
+                        current_state = localizer_ptr_->state();
+                        printf("[imu predict state timestamp %f\n", current_state.timestamp);
+                        printf("[imu predict state cov] (%f,%f,%f)\n", current_state.cov.diagonal().x(), current_state.cov.diagonal().y(), current_state.cov.diagonal().z());
+                        printf("[imu predict state pos] (%f,%f,%f)\n", current_state.G_p_I.x(), current_state.G_p_I.y(), current_state.G_p_I.z());
+                        printf("[imu predict state vel] (%f,%f,%f)\n", current_state.G_v_I.x(), current_state.G_v_I.y(), current_state.G_v_I.z());
+                        // LoggerWriteTrajectory(current_state.G_p_I.x(), current_state.G_p_I.y(), "192.168.1.100", 8888);
+                        Eigen::Quaterniond q(current_state.G_R_I);
+                        q.normalize();
+                        // 旋转矩阵转旋转向量
+                        Eigen::AngleAxisd rotate_vec(q);
+                        char str_buffer[100] = {0};
+                        // angle, rx,ry,rz
+                        sprintf(str_buffer, "%.3f %.3f %.3f %3f", rotate_vec.angle() * kRadianToDegree, rotate_vec.axis().x(), rotate_vec.axis().y(), rotate_vec.axis().z());
+                        // LoggerWrite(str_buffer, strlen(str_buffer), "192.168.143.32", 8888);
+
+                        // printf("[imu predict state q] (%f,%f,%f,%f)\n", q.x(), q.y(), q.z(), q.w());
+                        // 旋转矩阵转欧拉角
+                        Eigen::Vector3d euler = q.toRotationMatrix().eulerAngles(2, 1, 0);
+                        // printf("[imu predict state rpy] (%f,%f,%f)\n", euler[0] * kRadianToDegree, euler[1] * kRadianToDegree, euler[2] * kRadianToDegree);
+
+                        Eigen::Vector3d acc_bias = current_state.acc_bias;
+                        Eigen::Vector3d gyro_bias = current_state.gyro_bias;
+                        // imu_odometry_file << current_state.timestamp << " ";
+                        // imu_odometry_file << current_state.G_p_I.x() << " " << current_state.G_p_I.y() << " " << current_state.G_p_I.z() << " ";
+                        // imu_odometry_file << current_state.G_v_I.x() << " " << current_state.G_v_I.y() << " " << current_state.G_v_I.z() << " ";
+                        // imu_odometry_file << q.x() << " " << q.y() << " " << q.z() << " " << q.w() << " ";
+                        // imu_odometry_file << acc_bias.x() << " " << acc_bias.y() << " " << acc_bias.z() << " ";
+                        // imu_odometry_file << gyro_bias.x() << " " << gyro_bias.y() << " " << gyro_bias.z() << " ";
+                        // imu_odometry_file << std::endl;
+                    }
+                }
+            }
+            imu_odometry_file.close();
+            gps_pos_file.close();
+        }
+
+        void Odometry(ImuReader &imu_reader, GPSReader &gps_reader)
+        {
+            std::unique_ptr<Localization::Eskf> localizer_ptr_ =
+                std::make_unique<Localization::Eskf>(kAccNoise, kGyroNoise,
+                                                     kAccBiasRandomWalk, kGyroBiasRandomWalk,
+                                                     kArmPos, kGravityNorm, kVelocityMax);
+            Localization::State current_state;
+            std::fstream eskf_state_file = std::fstream("eskf_state.bag", std::ios::out);
+            std::fstream gps_pos_file = std::fstream("gps_pos.bag", std::ios::out);
+            // 当前时间
+            auto save_time = std::chrono::steady_clock::now();
+            auto save_interval = std::chrono::milliseconds(100);
+
+            while (true)
             {
                 const Localization::ImuDataPtr imu_data_ptr = ReadImuData(imu_reader);
                 if (imu_data_ptr && localizer_ptr_->ProcessImuData(imu_data_ptr))
@@ -294,9 +419,12 @@ namespace Localization
                     {
                         save_time = std::chrono::steady_clock::now();
                         current_state = localizer_ptr_->state();
-                        // printf("[eskf state pos] (%f,%f,%f)\n", current_state.G_p_I.x(), current_state.G_p_I.y(), current_state.G_p_I.z());
+                        // printf("[eskf state timestamp %f\n", current_state.timestamp);
+                        // printf("[eskf state cov] (%f,%f,%f)\n", current_state.cov.diagonal().x(), current_state.cov.diagonal().y(), current_state.cov.diagonal().z());
+                        printf("[eskf state pos] (%f,%f,%f)\n", current_state.G_p_I.x(), current_state.G_p_I.y(), current_state.G_p_I.z());
                         // printf("[eskf state vel] (%f,%f,%f)\n", current_state.G_v_I.x(), current_state.G_v_I.y(), current_state.G_v_I.z());
-
+                        // LoggerWriteTrajectory(current_state.G_p_I.x(), current_state.G_p_I.y(), "192.168.1.100",8888);
+                        
                         Eigen::Quaterniond q(current_state.G_R_I);
                         q.normalize();
                         // printf("[eskf state q] (%f,%f,%f,%f)\n", q.x(), q.y(), q.z(), q.w());
@@ -311,7 +439,6 @@ namespace Localization
                         eskf_state_file << acc_bias.x() << " " << acc_bias.y() << " " << acc_bias.z() << " ";
                         eskf_state_file << gyro_bias.x() << " " << gyro_bias.y() << " " << gyro_bias.z() << " ";
                         eskf_state_file << std::endl;
-                        // printf("imu predict state (%f,%f,%f)\n", current_state.G_p_I.x(), current_state.G_p_I.y(), current_state.G_p_I.z());
                     }
                 }
 
@@ -321,7 +448,9 @@ namespace Localization
                     current_state = localizer_ptr_->state();
                     Eigen::Vector3d enu;
                     ConvertLLAToENU(localizer_ptr_->initial_lla(), gps_data_ptr->lla, enu);
-                    // printf("[gps pos] (%f,%f,%f)\n", enu.x(), enu.y(), enu.z());
+                    printf("[gps pos] (%f,%f,%f)\n", enu.x(), enu.y(), enu.z());
+
+                    // LoggerWriteGps(enu.x(), enu.y(), "192.168.1.100", 8888);
                     // 记录数据
                     gps_pos_file << gps_data_ptr->timestamp << " ";
                     gps_pos_file << enu.x() << " " << enu.y() << " " << enu.z() << " ";
@@ -333,6 +462,7 @@ namespace Localization
         }
     };
 }
+
 int main(int argc, char **argv)
 {
     // udevadm info -a -n /dev/ttyUSB1 | grep KERNELS    绑定USB口位置
@@ -343,7 +473,9 @@ int main(int argc, char **argv)
     GPSReader gps_reader("/dev/gps", B9600);
     gps_reader.EnableReadThread();
     Localization::EskfSystem eskf_system;
-    eskf_system.Run(imu_reader, gps_reader);
+    eskf_system.Odometry(imu_reader, gps_reader);
+    // eskf_system.CollectImuData(imu_reader);
+    // eskf_system.ImuOdometry(imu_reader);
     // eskf_system.PrintImuData(imu_reader);
 
     return 0;
