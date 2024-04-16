@@ -192,7 +192,7 @@ void GPSReader::EnableReadThread()
                     }
 
                     memset(message, 0, MESSAGE_LEN);
-                    memcpy(message, buf + start, end - start);
+                    memcpy(message, buf + start, pack_end - start);
                     // parse GGA
                     // if (head_code.compare("$GPGGA") == 0 || head_code.compare("$GNGGA") == 0)
                     // {
